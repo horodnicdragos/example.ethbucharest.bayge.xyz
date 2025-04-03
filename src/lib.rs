@@ -27,113 +27,84 @@ fn in_bounds(row_size: u32, x: u32, y: u32) -> bool {
     x < row_size && y < row_size
 }
 
-// Find the in check threats for the king given, returning the nonces of
-// the threats.
-fn in_check_threats(board: &Board, row_size: u32, king_pos: u32) -> Vec<u32> {
-    let (king_x, king_y) = pos_to_xy(row_size, king_pos);
+fn in_check_threats(
+    search_start: u32,
+    search_end: u32,
+    board: &Board,
+    row_size: u32,
+    king_pos: u32,
+) -> Vec<u32> {
     let mut threats = vec![];
-    // The following code takes the position of the king, then searches for pieces in
-    // positions that might threaten the king, then adding them as threats if they're
-    // the kind of piece to be a threat.
-    macro_rules! piece_add_threat_if_valid {
-        ($piece:ident, $x:expr, $y:expr) => {
-            if in_bounds(row_size, $x, $y) {
-                if let Some((Piece::$piece, n)) = board.get(&xy_to_pos(row_size, $x, $y)) {
-                    threats.push(*n);
-                }
+    for i in search_start..search_end {
+        if let Some((piece, piece_pos)) = board.get(&i) {
+            if is_solved(row_size, king_pos, *piece_pos, *piece) {
+                threats.push(i);
             }
-        };
-    }
-    // Pawn
-    for dx in [-1, 1] {
-        let x = king_x.wrapping_add_signed(dx);
-        let y = king_y.wrapping_sub(1);
-        piece_add_threat_if_valid!(PAWN, x, y);
-    }
-    // Knight
-    for (dx, dy) in [
-        (-2, -1),
-        (-2, 1),
-        (-1, -2),
-        (-1, 2),
-        (1, -2),
-        (1, 2),
-        (2, -1),
-        (2, 1),
-    ] {
-        piece_add_threat_if_valid!(
-            KNIGHT,
-            king_x.wrapping_add_signed(dx),
-            king_y.wrapping_add_signed(dy)
-        );
-    }
-    // Rook/Queen
-    for (dx, dy) in [(-1, 0), (1, 0), (0, -1), (0, 1)] {
-        let mut x = king_x;
-        let mut y = king_y;
-        loop {
-            x = x.wrapping_add_signed(dx);
-            y = y.wrapping_add_signed(dy);
-            // It's true that the macro does this check as well, but any compiler
-            // would optimise this out, so we leave it for brevity reasons.
-            if !in_bounds(row_size, x, y) {
-                break;
-            }
-            piece_add_threat_if_valid!(CASTLE, x, y);
-            piece_add_threat_if_valid!(QUEEN, x, y);
-        }
-    }
-    // Bishop/Queen
-    for (dx, dy) in [(-1, -1), (-1, 1), (1, -1), (1, 1)] {
-        let mut x = king_x;
-        let mut y = king_y;
-        loop {
-            x = x.wrapping_add_signed(dx);
-            y = y.wrapping_add_signed(dy);
-            if !in_bounds(row_size, x, y) {
-                break;
-            }
-            piece_add_threat_if_valid!(BISHOP, x, y);
-            piece_add_threat_if_valid!(QUEEN, x, y);
-        }
-    }
-    // King
-    for dx in [-1, 0, 1] {
-        for dy in [-1, 0, 1] {
-            // Make sure we're not hcecking the king against itself, and that we're
-            // not in the corner.
-            let x = king_x.wrapping_add_signed(dx);
-            let y = king_y.wrapping_add_signed(dy);
-            if dx == 0 && dy == 0 || xy_to_pos(row_size, x, y) == king_pos {
-                continue;
-            }
-            piece_add_threat_if_valid!(KING, x, y);
         }
     }
     threats
+}
+
+fn is_solved(row_size: u32, king_pos: u32, piece_pos: u32, piece: Piece) -> bool {
+    let (king_x, king_y) = pos_to_xy(row_size, king_pos);
+    let (piece_x, piece_y) = pos_to_xy(row_size, piece_pos);
+
+    let dx = if king_x > piece_x {
+        king_x - piece_x
+    } else {
+        piece_x - king_x
+    };
+    let dy = if king_y > piece_y {
+        king_y - piece_y
+    } else {
+        piece_y - king_y
+    };
+
+    if dx + dy == 0 {
+        return false;
+    }
+
+    match piece {
+        Piece::PAWN => piece_y + 1 == king_y && dx == 1,
+        Piece::CASTLE => dx == 0 || dy == 0,
+        Piece::QUEEN => dx == 0 || dy == 0 || dx == dy,
+        Piece::BISHOP => dx == dy,
+        Piece::KNIGHT => dx * dy == 2,
+        Piece::KING => dx <= 1 && dy <= 1,
+    }
 }
 
 pub fn solve(starting_hash: &[u8], start: u32) -> Option<(u32, u32)> {
     let row_size = BOARD_SIZE.isqrt();
     let mut board = BTreeMap::new();
     let mut last_king = None;
+    let mut threats = vec![];
     for i in start..MAX_TRIES {
         let e = prover::hash(starting_hash, i);
-        // let king_id: u8 = Piece::KING.into();
-        // let p_id: u8 = (e % (king_id as u64 + 1)).try_into().unwrap();
         let p_id: u8 = (e % 6).try_into().unwrap();
         let p = Piece::try_from(p_id).unwrap();
         let offset: u32 = (e >> 32).try_into().unwrap();
         let pos: u32 = offset % BOARD_SIZE;
-        board.insert(pos, (p, i));
+        board.insert(i, (p, pos));
         if p == Piece::KING {
             last_king = Some((pos, i));
+            threats = in_check_threats(start, i, &board, row_size, pos);
+        } else if let Some((last_king_pos, last_king_nonce)) = last_king {
+            {
+                let solved = is_solved(row_size, last_king_pos, pos, p);
+
+                if solved {
+                    threats.push(i);
+                }
+            }
         }
-        if let Some((last_king_pos, last_king_nonce)) = last_king {
-            let mut threats = in_check_threats(&board, row_size, last_king_pos);
+
+        if let Some((_last_king_pos, last_king_nonce)) = last_king {
             if threats.len() >= CHECKS_NEEDED as usize {
                 threats.push(last_king_nonce);
-                return Some((*threats.iter().min().unwrap(), i));
+                let first_threat = *threats.iter().min().unwrap();
+                println!("first_threat: {:?}", threats);
+                return Some((first_threat, i));
             }
         }
     }
@@ -167,7 +138,18 @@ mod test {
 
     proptest! {
         #[test]
-        fn test_solve(starting_hash in any::<[u8; 64]>()) {
+        fn test_solve(starting_hash in any::<[u8; 32]>()) {
+            let y: u32 = 10;
+            let a: i32 = -1;
+            let x: u32 = y.wrapping_add_signed(a);
+            assert_eq!(x, 9);
+            println!("x: {}", CHECKS_NEEDED);
+            for i in 0..10 {
+                loop {
+                    println!("i: {}", i);
+                    break;
+                }
+            }
             // First, let's test if the user-defined algorithm is consistent.
             let (e_l, e_h) = solve(&starting_hash, 0).unwrap();
             // Let's run our function against the first invocation of the function!

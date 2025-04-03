@@ -119,8 +119,9 @@ pub fn solve(starting_hash: &[u8], start: u32) -> Option<(u32, u32)> {
     let mut last_king = None;
     for i in start..MAX_TRIES {
         let e = prover::hash(starting_hash, i);
-        let king_id: u8 = Piece::KING.into();
-        let p_id: u8 = (e % (king_id as u64 + 1)).try_into().unwrap();
+        // let king_id: u8 = Piece::KING.into();
+        // let p_id: u8 = (e % (king_id as u64 + 1)).try_into().unwrap();
+        let p_id: u8 = (e % 6).try_into().unwrap();
         let p = Piece::try_from(p_id).unwrap();
         let offset: u32 = (e >> 32).try_into().unwrap();
         let pos: u32 = offset % BOARD_SIZE;

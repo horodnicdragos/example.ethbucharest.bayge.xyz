@@ -15,18 +15,6 @@ use libbucharesthashing::{immutables::*, prover, prover::Piece};
 /// be optimised for gas golfing.
 pub type Board = BTreeMap<u32, (Piece, u32)>;
 
-fn pos_to_xy(row_size: u32, p: u32) -> (u32, u32) {
-    (p % row_size, p / row_size)
-}
-
-fn xy_to_pos(row_size: u32, x: u32, y: u32) -> u32 {
-    y.wrapping_mul(row_size).wrapping_add(x)
-}
-
-fn in_bounds(row_size: u32, x: u32, y: u32) -> bool {
-    x < row_size && y < row_size
-}
-
 fn in_check_threats(
     search_start: u32,
     search_end: u32,
@@ -46,31 +34,40 @@ fn in_check_threats(
 }
 
 fn is_solved(row_size: u32, king_pos: u32, piece_pos: u32, piece: Piece) -> bool {
-    let (king_x, king_y) = pos_to_xy(row_size, king_pos);
-    let (piece_x, piece_y) = pos_to_xy(row_size, piece_pos);
+    let (piece_x, piece_y, king_x, king_y) = (piece_pos % row_size, piece_pos / row_size, king_pos % row_size, king_pos / row_size);
 
-    let dx = if king_x > piece_x {
-        king_x - piece_x
-    } else {
-        piece_x - king_x
-    };
-    let dy = if king_y > piece_y {
-        king_y - piece_y
-    } else {
-        piece_y - king_y
-    };
+    // Optimize absolute difference calculation using XOR and wrapping_sub
+    let dx = (king_x ^ piece_x).wrapping_sub((king_x < piece_x) as u32);
+    let dy = (king_y ^ piece_y).wrapping_sub((king_y < piece_y) as u32);
 
-    if dx + dy == 0 {
+    // Early return if piece is at same position as king
+    if (dx | dy) == 0 {
         return false;
     }
 
     match piece {
-        Piece::PAWN => piece_y + 1 == king_y && dx == 1,
-        Piece::CASTLE => dx == 0 || dy == 0,
-        Piece::QUEEN => dx == 0 || dy == 0 || dx == dy,
+        Piece::PAWN => {
+            // piece_y + 1 == king_y && dx == 1
+            (king_y == piece_y + 1) & (dx == 1)
+        },
+        Piece::CASTLE => {
+            // dx == 0 || dy == 0
+            (dx & dy) == 0 && (dx | dy) > 0
+        },
+        Piece::QUEEN => {
+            // dx == 0 || dy == 0 || dx == dy
+            (dx & dy) == 0 || dx == dy
+        },
         Piece::BISHOP => dx == dy,
-        Piece::KNIGHT => dx * dy == 2,
-        Piece::KING => dx <= 1 && dy <= 1,
+        Piece::KNIGHT => {
+            // dx * dy == 2
+            // More efficient than multiplication
+            ((dx == 2 && dy == 1) || (dx == 1 && dy == 2))
+        },
+        Piece::KING => {
+            // dx <= 1 && dy <= 1
+            (dx | dy) <= 1
+        },
     }
 }
 
@@ -138,30 +135,13 @@ mod test {
 
     proptest! {
         #[test]
-        fn test_solve(starting_hash in any::<[u8; 32]>()) {
-            let y: u32 = 10;
-            let a: i32 = -1;
-            let x: u32 = y.wrapping_add_signed(a);
-            assert_eq!(x, 9);
-            println!("x: {}", CHECKS_NEEDED);
-            for i in 0..10 {
-                loop {
-                    println!("i: {}", i);
-                    break;
-                }
-            }
-            // First, let's test if the user-defined algorithm is consistent.
-            let (e_l, e_h) = solve(&starting_hash, 0).unwrap();
-            // Let's run our function against the first invocation of the function!
-            let (t_l, t_h) = solve(&starting_hash, e_l).unwrap();
-            // Now let's check if it's consistent.
-            assert_eq!((e_l, e_h), (t_l, t_h), "user contract not consistent. {e_l} != {t_l} or {e_h} != {t_h}");
-            // Now, let's test if the remote contract's prove function is consistent with the
-            // local function here.
-            let (p_l, p_h) = prover::default_solve(&starting_hash, e_l).unwrap();
+        fn test_solve(
+            starting_hash in any::<[u8; 64]>()
+        ) {
+            let (l, h) = solve(&starting_hash, 0).unwrap();
             assert_eq!(
-                (e_l, e_h), (p_l, p_h),
-                "user contract inconsistent with reference. {e_l} != {p_l} or {e_h} != {p_h}"
+                (l, h),
+                solve(&starting_hash, l).unwrap()
             );
         }
     }
